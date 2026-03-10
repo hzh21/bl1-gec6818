@@ -1,4 +1,39 @@
-- name: 生成带 NSIH 头的最终固件 (Generate NSIH & Merge)
+name: Build bl1-gec6818
+
+on:
+  push:
+    branches: [ "artik", "master", "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: 检出代码 (Checkout)
+      uses: actions/checkout@v4
+
+    - name: 安装老版本编译依赖 (Install Legacy Dependencies)
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential libncurses5 libtinfo5
+
+    - name: 下载并解压交叉编译工具链 (Download Toolchain)
+      run: |
+        wget [https://releases.linaro.org/archive/14.04/components/toolchain/binaries/gcc-linaro-aarch64-none-elf-4.8-2014.04_linux.tar.bz2](https://releases.linaro.org/archive/14.04/components/toolchain/binaries/gcc-linaro-aarch64-none-elf-4.8-2014.04_linux.tar.bz2)
+        tar xvjf gcc-linaro-aarch64-none-elf-4.8-2014.04_linux.tar.bz2
+
+    - name: 修复配置文件和 Makefile (Patch config & Makefile)
+      run: |
+        sed -i 's/aarch64-elf-/aarch64-none-elf-/g' config.mak
+        sed -i 's/^[[:space:]]*fi[[:space:]]*$/# fi/g' Makefile
+
+    - name: 执行编译生成裸二进制文件 (Make BL1)
+      run: |
+        export PATH="$GITHUB_WORKSPACE/gcc-linaro-aarch64-none-elf-4.8-2014.04_linux/bin:$PATH"
+        make
+
+    - name: 生成带 NSIH 头的最终固件 (Generate NSIH & Merge)
       run: |
         # 1. 编译头部生成工具
         cd nsih-generator
@@ -11,21 +46,24 @@
         TOOL_NAME=$(basename "$TOOL_NAME")
         cd ..
 
-        # 2. 精准指定 NSIH 配置文件
+        # 2. 精准指定 NSIH 配置文件 (drone主板, sd卡启动, 64位)
         NSIH_TXT="reference-nsih/drone-sd-64.txt"
         echo "使用指定的 NSIH 配置文件: $NSIH_TXT"
 
         # 3. 使用工具合成最终固件
-        # 假设工具用法是： ./工具名 配置文件 输入代码.bin 输出合并.bin
         ./nsih-generator/$TOOL_NAME "$NSIH_TXT" out/bl1-drone.bin out/bl1-mmcboot-sd.bin
         
-        # 4. 备用防呆方案 (如果工具不直接支持合并，则先生成头，再用 cat 拼接)
+        # 4. 备用合并方案防呆
         if [ ! -f "out/bl1-mmcboot-sd.bin" ]; then
-          echo "工具可能不支持直接合并，尝试先生成 nsih.bin 然后手动拼接..."
+          echo "工具不直接支持合并，尝试先生成 nsih.bin 然后手动拼接..."
           ./nsih-generator/$TOOL_NAME "$NSIH_TXT" out/nsih.bin
           if [ -f "out/nsih.bin" ]; then
             cat out/nsih.bin out/bl1-drone.bin > out/bl1-mmcboot-sd.bin
-          else
-            echo "错误: 无法生成 nsih.bin 头部文件！"
           fi
         fi
+
+    - name: 上传最终编译产物 (Upload Artifact)
+      uses: actions/upload-artifact@v4
+      with:
+        name: bl1-gec6818-binaries
+        path: out/
