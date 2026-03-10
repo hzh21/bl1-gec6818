@@ -1,45 +1,31 @@
-name: Build bl1-gec6818
-
-on:
-  push:
-    branches: [ "artik", "master", "main" ]
-  workflow_dispatch:
-
-jobs:
-  build:
-    runs-on: ubuntu-22.04
-
-    steps:
-    - name: 检出代码 (Checkout)
-      uses: actions/checkout@v4
-
-    - name: 安装老版本编译依赖 (Install Legacy Dependencies)
+- name: 生成带 NSIH 头的最终固件 (Generate NSIH & Merge)
       run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential libncurses5 libtinfo5
+        # 1. 编译头部生成工具
+        cd nsih-generator
+        if [ -f "Makefile" ]; then
+          make
+        else
+          gcc -o nsih_generator *.c
+        fi
+        TOOL_NAME=$(find . -maxdepth 1 -type f -executable ! -name "*.sh" ! -name "*.c" | grep -v "\.o$" | head -n 1)
+        TOOL_NAME=$(basename "$TOOL_NAME")
+        cd ..
 
-    - name: 下载并解压交叉编译工具链 (Download Toolchain)
-      run: |
-        # 使用 Linaro 官方的 archive 归档地址
-        wget https://releases.linaro.org/archive/14.04/components/toolchain/binaries/gcc-linaro-aarch64-none-elf-4.8-2014.04_linux.tar.bz2
-        tar xvjf gcc-linaro-aarch64-none-elf-4.8-2014.04_linux.tar.bz2
+        # 2. 精准指定 NSIH 配置文件
+        NSIH_TXT="reference-nsih/drone-sd-64.txt"
+        echo "使用指定的 NSIH 配置文件: $NSIH_TXT"
 
-    - name: 修复配置文件和 Makefile (Patch config & Makefile)
-      run: |
-        # 1. 修正 config.mak 中的工具链前缀
-        sed -i 's/aarch64-elf-/aarch64-none-elf-/g' config.mak
+        # 3. 使用工具合成最终固件
+        # 假设工具用法是： ./工具名 配置文件 输入代码.bin 输出合并.bin
+        ./nsih-generator/$TOOL_NAME "$NSIH_TXT" out/bl1-drone.bin out/bl1-mmcboot-sd.bin
         
-        # 2. 修复 Makefile 中由于注释导致的孤立 fi 语法错误
-        sed -i 's/^[[:space:]]*fi[[:space:]]*$/# fi/g' Makefile
-
-    - name: 执行编译 (Make)
-      run: |
-        # 将工具链路径加入系统环境变量
-        export PATH="$GITHUB_WORKSPACE/gcc-linaro-aarch64-none-elf-4.8-2014.04_linux/bin:$PATH"
-        make
-
-    - name: 上传编译产物 (Upload Artifact)
-      uses: actions/upload-artifact@v4
-      with:
-        name: bl1-gec6818-binaries
-        path: out/
+        # 4. 备用防呆方案 (如果工具不直接支持合并，则先生成头，再用 cat 拼接)
+        if [ ! -f "out/bl1-mmcboot-sd.bin" ]; then
+          echo "工具可能不支持直接合并，尝试先生成 nsih.bin 然后手动拼接..."
+          ./nsih-generator/$TOOL_NAME "$NSIH_TXT" out/nsih.bin
+          if [ -f "out/nsih.bin" ]; then
+            cat out/nsih.bin out/bl1-drone.bin > out/bl1-mmcboot-sd.bin
+          else
+            echo "错误: 无法生成 nsih.bin 头部文件！"
+          fi
+        fi
