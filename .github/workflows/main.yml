@@ -1,5 +1,6 @@
 name: Build bl1-gec6818
 
+# 触发条件：推送到代码库，或者在 Actions 页面手动点击运行
 on:
   push:
     branches: [ "artik", "master", "main" ]
@@ -7,7 +8,7 @@ on:
 
 jobs:
   build:
-    # 改用 ubuntu-22.04
+    # 必须使用 ubuntu-22.04（GitHub 已弃用 20.04）
     runs-on: ubuntu-22.04
 
     steps:
@@ -17,7 +18,7 @@ jobs:
     - name: 安装老版本编译依赖 (Install Legacy Dependencies)
       run: |
         sudo apt-get update
-        # 安装编译基础工具和旧版 ncurses 库以兼容 2014 年的工具链
+        # 安装编译基础工具和旧版 ncurses 库以兼容 2014 年的老工具链
         sudo apt-get install -y build-essential libncurses5 libtinfo5
 
     - name: 下载并解压交叉编译工具链 (Download Toolchain)
@@ -25,10 +26,13 @@ jobs:
         wget https://releases.linaro.org/14.04/components/toolchain/binaries/gcc-linaro-aarch64-none-elf-4.8-2014.04_linux.tar.bz2
         tar xvjf gcc-linaro-aarch64-none-elf-4.8-2014.04_linux.tar.bz2
 
-    - name: 修复 config.mak 配置 (Patch config.mak)
+    - name: 修复配置文件和 Makefile (Patch config & Makefile)
       run: |
-        # 将 aarch64-elf- 替换为下载的 aarch64-none-elf-
+        # 1. 修正 config.mak 中的工具链前缀 (将 aarch64-elf- 改为 aarch64-none-elf-)
         sed -i 's/aarch64-elf-/aarch64-none-elf-/g' config.mak
+        
+        # 2. 修复 Makefile 中由于注释导致的孤立 fi 语法错误
+        sed -i 's/^[[:space:]]*fi[[:space:]]*$/# fi/g' Makefile
 
     - name: 执行编译 (Make)
       run: |
@@ -40,5 +44,5 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: bl1-gec6818-binaries
-        # 提取 out 目录下的文件
+        # 提取 out 目录下的生成文件
         path: out/
