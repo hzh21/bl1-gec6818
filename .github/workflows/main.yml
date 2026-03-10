@@ -20,7 +20,7 @@ jobs:
 
     - name: 下载并解压交叉编译工具链 (Download Toolchain)
       run: |
-        wget [https://releases.linaro.org/archive/14.04/components/toolchain/binaries/gcc-linaro-aarch64-none-elf-4.8-2014.04_linux.tar.bz2](https://releases.linaro.org/archive/14.04/components/toolchain/binaries/gcc-linaro-aarch64-none-elf-4.8-2014.04_linux.tar.bz2)
+        wget https://releases.linaro.org/archive/14.04/components/toolchain/binaries/gcc-linaro-aarch64-none-elf-4.8-2014.04_linux.tar.bz2
         tar xvjf gcc-linaro-aarch64-none-elf-4.8-2014.04_linux.tar.bz2
 
     - name: 修复配置文件和 Makefile (Patch config & Makefile)
