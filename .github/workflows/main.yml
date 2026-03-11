@@ -29,8 +29,8 @@ jobs:
         sed -i 's/OPMODE[[:space:]]*=[[:space:]]*aarch32/#OPMODE = aarch32/g' config.mak
         sed -i 's/#OPMODE[[:space:]]*=[[:space:]]*aarch64/OPMODE = aarch64/g' config.mak
 
-        # 2. 暴力修复主板配置：注释掉旧配置，强制在末尾追加 RAPTOR
-        sed -i 's/^BOARD/# BOARD/g' config.mak
+        # 2. 暴力修复主板配置：注释掉所有默认的 BOARD，强制在末尾追加 RAPTOR
+        sed -i 's/^BOARD/#BOARD/g' config.mak
         echo "BOARD = RAPTOR" >> config.mak
         
         # 3. 修正 64位 工具链前缀
