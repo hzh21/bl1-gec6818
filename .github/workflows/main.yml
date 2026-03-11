@@ -103,8 +103,8 @@ jobs:
             main()
         EOF
 
-        # 注意：确认你 make 出来的文件是不是叫 bl1-xxx.bin，如果不对请根据 out/ 目录实际文件名修改
-        python3 build_nsih.py "reference-nsih/raptor-sd-64.txt" "out/bl1-gec6818.bin" "out/bl1-mmcboot.bin"
+        RAW_BIN=$(ls out/*.bin | head -n 1)
+        python3 build_nsih.py "reference-nsih/raptor-sd-64.txt" "$RAW_BIN" "out/bl1-mmcboot.bin"
 
     - name: 上传最终编译产物 (Upload Artifact)
       uses: actions/upload-artifact@v4
