@@ -29,9 +29,9 @@ jobs:
         sed -i 's/OPMODE[[:space:]]*=[[:space:]]*aarch32/#OPMODE = aarch32/g' config.mak
         sed -i 's/#OPMODE[[:space:]]*=[[:space:]]*aarch64/OPMODE = aarch64/g' config.mak
 
-        # 2. 将主板切换为 RAPTOR
-        sed -i 's/BOARD[[:space:]]*=[[:space:]]*DRONE/#BOARD = DRONE/g' config.mak
-        sed -i 's/#BOARD[[:space:]]*=[[:space:]]*RAPTOR/BOARD = RAPTOR/g' config.mak
+        # 2. 暴力修复主板配置：注释掉旧配置，强制在末尾追加 RAPTOR
+        sed -i 's/^BOARD/# BOARD/g' config.mak
+        echo "BOARD = RAPTOR" >> config.mak
         
         # 3. 修正 64位 工具链前缀
         sed -i 's/aarch64-elf-/aarch64-none-elf-/g' config.mak
@@ -57,7 +57,7 @@ jobs:
             header = bytearray(512)
             idx = 0
             
-            # 1. 先读取官方基础配置 (保证扇区地址和 64位 加载机制正确)
+            # 1. 读取官方基础配置
             with open(txt_path, 'r') as f:
                 for line in f:
                     line = line.strip()
@@ -71,7 +71,7 @@ jobs:
                     except ValueError:
                         pass
             
-            # 2. 荣品专属 2GB 内存硬核覆盖区 (从你提供的文本提取)
+            # 2. 荣品专属 2GB 内存硬核覆盖区
             ddr_2g_params = {
                 0x098: 0x03100302, 0x09C: 0x004007C0, 0x0A0: 0x06000B08,
                 0x0A4: 0x0C0C0C0C, 0x0A8: 0x04040404, 0x0AC: 0x0000401B,
@@ -79,11 +79,10 @@ jobs:
                 0x0BC: 0x41000A26, 0x0C0: 0x00020102, 0x0C4: 0x06060606,
                 0x0C8: 0x06060606, 0x0CC: 0x00000104, 0x0D0: 0x00000004
             }
-            # 将 2GB 参数强制打入 512 字节头部对应的物理偏移地址
             for offset, val in ddr_2g_params.items():
                 struct.pack_into('<I', header, offset, val)
             
-            # 3. 合并刚才编译好的纯代码
+            # 3. 合并文件
             with open(bin_path, 'rb') as f:
                 bin_data = f.read()
                 
@@ -97,7 +96,6 @@ jobs:
             main()
         EOF
 
-        # 运行脚本
         python3 build_nsih.py "reference-nsih/raptor-sd-64.txt" "out/bl1-raptor.bin" "out/bl1-mmcboot-sd.bin"
 
     - name: 上传最终编译产物 (Upload Artifact)
