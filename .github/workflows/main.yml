@@ -92,7 +92,7 @@ jobs:
             main()
         EOF
 
-        python3 build_nsih.py "reference-nsih/raptor-sd-64.txt" "out/bl1-raptor.bin" "out/bl1-mmcboot-sd.bin"
+        python3 build_nsih.py "reference-nsih/raptor-sd-64.txt" "out/bl1-drone.bin" "out/bl1-mmcboot-sd.bin"
 
     - name: 上传最终编译产物 (Upload Artifact)
       uses: actions/upload-artifact@v4
