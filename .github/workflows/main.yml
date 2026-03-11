@@ -1,4 +1,4 @@
-name: Build bl1-gec6818
+name: Build bl1-gec6818 (64-bit Raptor 2GB Unlock)
 
 on:
   push:
@@ -18,24 +18,34 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y build-essential libncurses5 libtinfo5
 
-    - name: 下载并解压交叉编译工具链 (Download Toolchain)
+    - name: 下载并解压 64位 交叉编译工具链 (Download 64-bit Toolchain)
       run: |
         wget https://releases.linaro.org/archive/14.04/components/toolchain/binaries/gcc-linaro-aarch64-none-elf-4.8-2014.04_linux.tar.bz2
         tar xvjf gcc-linaro-aarch64-none-elf-4.8-2014.04_linux.tar.bz2
 
     - name: 修复配置文件和 Makefile (Patch config & Makefile)
       run: |
+        # 1. 确保使用 64 位模式
+        sed -i 's/OPMODE[[:space:]]*=[[:space:]]*aarch32/#OPMODE = aarch32/g' config.mak
+        sed -i 's/#OPMODE[[:space:]]*=[[:space:]]*aarch64/OPMODE = aarch64/g' config.mak
+
+        # 2. 将主板切换为 RAPTOR
+        sed -i 's/BOARD[[:space:]]*=[[:space:]]*DRONE/#BOARD = DRONE/g' config.mak
+        sed -i 's/#BOARD[[:space:]]*=[[:space:]]*RAPTOR/BOARD = RAPTOR/g' config.mak
+        
+        # 3. 修正 64位 工具链前缀
         sed -i 's/aarch64-elf-/aarch64-none-elf-/g' config.mak
+        
+        # 4. 修复 Makefile 语法错误
         sed -i 's/^[[:space:]]*fi[[:space:]]*$/# fi/g' Makefile
 
-    - name: 执行编译生成裸二进制文件 (Make BL1)
+    - name: 执行编译生成 64位 裸二进制文件 (Make BL1)
       run: |
         export PATH="$GITHUB_WORKSPACE/gcc-linaro-aarch64-none-elf-4.8-2014.04_linux/bin:$PATH"
         make
 
-    - name: 使用 Python 自动合成 NSIH 头部 (Merge NSIH via Python)
+    - name: 注入 2GB 内存参数合成 NSIH (Inject 2GB RAM & Merge)
       run: |
-        # 创建一个 Python 脚本来解析 txt 并合并二进制
         cat << 'EOF' > build_nsih.py
         import sys, struct
 
@@ -44,46 +54,51 @@ jobs:
             bin_path = sys.argv[2]
             out_path = sys.argv[3]
             
-            # 初始化 512 字节的头部，全填 0
             header = bytearray(512)
             idx = 0
             
-            # 解析 txt 文件中的 16 进制数据
+            # 1. 先读取官方基础配置 (保证扇区地址和 64位 加载机制正确)
             with open(txt_path, 'r') as f:
                 for line in f:
                     line = line.strip()
-                    # 忽略空行和注释
-                    if not line or line.startswith(('//', '#')): 
-                        continue
-                    
-                    # 提取每行的第一个有效十六进制字符串
+                    if not line or line.startswith(('//', '#')): continue
                     token = line.split()[0]
                     try:
                         val = int(token, 16)
                         if idx < 128:
-                            # 按照小端序 (Little-Endian) 写入 32 位无符号整数
                             struct.pack_into('<I', header, idx * 4, val)
                             idx += 1
                     except ValueError:
                         pass
             
-            # 读取刚才编译出的 bl1-drone.bin
+            # 2. 荣品专属 2GB 内存硬核覆盖区 (从你提供的文本提取)
+            ddr_2g_params = {
+                0x098: 0x03100302, 0x09C: 0x004007C0, 0x0A0: 0x06000B08,
+                0x0A4: 0x0C0C0C0C, 0x0A8: 0x04040404, 0x0AC: 0x0000401B,
+                0x0B0: 0x00620618, 0x0B4: 0x6836650E, 0x0B8: 0x3630580B,
+                0x0BC: 0x41000A26, 0x0C0: 0x00020102, 0x0C4: 0x06060606,
+                0x0C8: 0x06060606, 0x0CC: 0x00000104, 0x0D0: 0x00000004
+            }
+            # 将 2GB 参数强制打入 512 字节头部对应的物理偏移地址
+            for offset, val in ddr_2g_params.items():
+                struct.pack_into('<I', header, offset, val)
+            
+            # 3. 合并刚才编译好的纯代码
             with open(bin_path, 'rb') as f:
                 bin_data = f.read()
                 
-            # 拼接并保存最终固件
             with open(out_path, 'wb') as f:
                 f.write(header)
                 f.write(bin_data)
                 
-            print(f"成功生成完美固件！NSIH 头部大小: {idx*4} bytes, BL1 载荷大小: {len(bin_data)} bytes.")
+            print(f"成功生成完美 2GB 解锁版固件！BL1 大小: {len(bin_data)} bytes.")
 
         if __name__ == '__main__':
             main()
         EOF
 
-        # 运行刚才生成的 Python 脚本，指定 SD 卡 64 位配置
-        python3 build_nsih.py "reference-nsih/drone-sd-64.txt" "out/bl1-drone.bin" "out/bl1-mmcboot-sd.bin"
+        # 运行脚本
+        python3 build_nsih.py "reference-nsih/raptor-sd-64.txt" "out/bl1-raptor.bin" "out/bl1-mmcboot-sd.bin"
 
     - name: 上传最终编译产物 (Upload Artifact)
       uses: actions/upload-artifact@v4
