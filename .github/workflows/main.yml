@@ -1,4 +1,4 @@
-name: Build bl1-gec6818 (64-bit Raptor 2GB Unlock)
+name: Build bl1-gec6818 (32-bit Raptor 2GB Unlock)
 
 on:
   push:
@@ -18,26 +18,27 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y build-essential libncurses5 libtinfo5
 
-    - name: 下载并解压 64位 交叉编译工具链 (Download 64-bit Toolchain)
+    - name: 下载并解压 32位 交叉编译工具链 (Download 32-bit Toolchain)
       run: |
-        wget https://releases.linaro.org/archive/14.04/components/toolchain/binaries/gcc-linaro-aarch64-none-elf-4.8-2014.04_linux.tar.bz2
-        tar xvjf gcc-linaro-aarch64-none-elf-4.8-2014.04_linux.tar.bz2
+        # 注意：这里换回了 32 位的工具链
+        wget https://releases.linaro.org/archive/14.04/components/toolchain/binaries/gcc-linaro-arm-none-eabi-4.8-2014.04_linux.tar.bz2
+        tar xvjf gcc-linaro-arm-none-eabi-4.8-2014.04_linux.tar.bz2
 
     - name: 修复配置文件和 Makefile (Patch config & Makefile)
       run: |
-        # 1. 确保使用 64 位模式
-        sed -i 's/OPMODE[[:space:]]*=[[:space:]]*aarch32/#OPMODE = aarch32/g' config.mak
-        sed -i 's/#OPMODE[[:space:]]*=[[:space:]]*aarch64/OPMODE = aarch64/g' config.mak
+        # 1. 确保使用 32 位模式 (aarch32)
+        sed -i 's/OPMODE[[:space:]]*=[[:space:]]*aarch64/#OPMODE = aarch64/g' config.mak
+        sed -i 's/#OPMODE[[:space:]]*=[[:space:]]*aarch32/OPMODE = aarch32/g' config.mak
         
-        # 3. 修正 64位 工具链前缀
-        sed -i 's/aarch64-elf-/aarch64-none-elf-/g' config.mak
+        # 3. 修正 32位 工具链前缀
+        sed -i 's/arm-eabi-/arm-none-eabi-/g' config.mak
         
         # 4. 修复 Makefile 语法错误
         sed -i 's/^[[:space:]]*fi[[:space:]]*$/# fi/g' Makefile
 
-    - name: 执行编译生成 64位 裸二进制文件 (Make BL1)
+    - name: 执行编译生成 32位 裸二进制文件 (Make BL1)
       run: |
-        export PATH="$GITHUB_WORKSPACE/gcc-linaro-aarch64-none-elf-4.8-2014.04_linux/bin:$PATH"
+        export PATH="$GITHUB_WORKSPACE/gcc-linaro-arm-none-eabi-4.8-2014.04_linux/bin:$PATH"
         make
 
     - name: 注入 2GB 内存参数合成 NSIH (Inject 2GB RAM & Merge)
@@ -53,7 +54,7 @@ jobs:
             header = bytearray(512)
             idx = 0
             
-            # 1. 读取官方基础配置
+            # 1. 读取官方 32位 基础配置 (保证和原厂 .bak 的加载逻辑一模一样)
             with open(txt_path, 'r') as f:
                 for line in f:
                     line = line.strip()
@@ -67,7 +68,7 @@ jobs:
                     except ValueError:
                         pass
             
-            # 2. 荣品专属 2GB 内存硬核覆盖区
+            # 2. 荣品专属 2GB 内存硬核覆盖区 (精准替换内存控制寄存器)
             ddr_2g_params = {
                 0x098: 0x03100302, 0x09C: 0x004007C0, 0x0A0: 0x06000B08,
                 0x0A4: 0x0C0C0C0C, 0x0A8: 0x04040404, 0x0AC: 0x0000401B,
@@ -86,13 +87,17 @@ jobs:
                 f.write(header)
                 f.write(bin_data)
                 
-            print(f"成功生成完美 2GB 解锁版固件！BL1 大小: {len(bin_data)} bytes.")
+            print(f"成功生成完美 32位 2GB 解锁版固件！原始固件: {bin_path}, BL1 大小: {len(bin_data)} bytes.")
 
         if __name__ == '__main__':
             main()
         EOF
 
-        python3 build_nsih.py "reference-nsih/raptor-sd-64.txt" "out/bl1-drone.bin" "out/bl1-mmcboot-sd.bin"
+        RAW_BIN=$(ls out/*.bin | head -n 1)
+        echo "自动识别到原始固件: $RAW_BIN"
+        
+        # 注意：这里改成了读取 raptor-sd-32.txt 作为基础配置
+        python3 build_nsih.py "reference-nsih/raptor-sd-32.txt" "$RAW_BIN" "out/bl1-mmcboot-sd.bin"
 
     - name: 上传最终编译产物 (Upload Artifact)
       uses: actions/upload-artifact@v4
