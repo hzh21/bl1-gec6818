@@ -37,7 +37,7 @@ jobs:
 
         # 核心截胡：直接在 iSDHCBOOT 函数最开头，强行篡改 pSBI->DEVICEADDR 的值！
         # 129 扇区 * 512 字节/扇区 = 66048 (0x10200)
-        sed -i '/pSDXCBootStatus = &lSDXCBootStatus;/a \t\tpSBI->DEVICEADDR = 66048;' src/iSDHCBOOT.c
+        sed -i 's/pSDXCBootStatus = \&lSDXCBootStatus;/& pSBI->DEVICEADDR = 66048;/g' src/iSDHCBOOT.c
         
         # 5. 切除 TrustZone 1GB 枷锁 (确保 2GB 全开)
         sed -i 's/0x40000000/0x40000000/g' src/SecureManager.c || true
