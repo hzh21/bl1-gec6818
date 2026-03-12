@@ -99,7 +99,7 @@ jobs:
         echo "找到编译输出的裸固件: $RAW_BIN"
         
         # 注意：使用 32 位的 txt 作为底稿！
-        python3 build_nsih.py "reference-nsih/drone-sd.txt" "$RAW_BIN" "out/bl1-mmcboot.bin"
+        python3 build_nsih.py "reference-nsih/drone-sd-32.txt" "$RAW_BIN" "out/bl1-mmcboot.bin"
 
     - name: 上传最终编译产物 (Upload Artifact)
       uses: actions/upload-artifact@v4
