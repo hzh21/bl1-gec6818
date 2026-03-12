@@ -18,7 +18,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y build-essential libncurses5 libtinfo5 gcc-arm-none-eabi
 
-    - name: 修复配置文件并植入 DEBUG 探针 (Patch config & Add Debug Probe)
+    - name: 植入终极盲读加载器 (Inject Ultimate Blind Loader)
       run: |
         # 1. 强制回归 32 位模式并修复编译环境
         sed -i 's/OPMODE[[:space:]]*=[[:space:]]*aarch64/#OPMODE = aarch32/g' config.mak
@@ -29,51 +29,56 @@ jobs:
         sed -i 's/0x0F << 28/0x0F << 28 | 0x1E << 1/g' src/SecureManager.c || true
         echo "CFLAGS += -fcommon" >> config.mak
 
-        # 2. 核心探测：用 Python 植入 printf 探针
-        cat << 'EOF' > patch_c_code.py
-        import os
+        # 2. Python 暴力重写加载逻辑，锁死通道 2，实施盲读
+        cat << 'EOF' > rewrite_loader.py
+        import re
 
-        target_file = 'src/iSDHCBOOT.c'
-        with open(target_file, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
+        with open('src/iSDHCBOOT.c', 'r', encoding='utf-8') as f:
+            content = f.read()
 
-        new_lines = []
-        for line in lines:
-            # 切除 AES 解密触发器
-            if 'pReg_ClkPwr->SYSRSTCONFIG & 1<<14' in line:
-                line = line.replace('pReg_ClkPwr->SYSRSTCONFIG & 1<<14', '0')
+        # 正则匹配删除原有的 SDMMCBOOT 冗长校验函数
+        pattern = re.compile(r'static\s+CBOOL\s+SDMMCBOOT.*?(?=U32\s+iSDXCBOOT)', re.DOTALL)
+        
+        custom_sdmmcboot = """static CBOOL SDMMCBOOT(SDXCBOOTSTATUS * pSDXCBootStatus, struct NX_SecondBootInfo * pTBI)
+        {
+            CBOOL result = CFALSE;
+            U32 load_addr = 0x7FD00800; // 友善官方定死的装载地址
+            U32 sector_count = 640;     // 扇区 129 到 768
             
-            # 强行指定 129 扇区地址
-            if 'pSDXCBootStatus = &lSDXCBootStatus;' in line:
-                new_lines.append(line)
-                new_lines.append('\t\tpSBI->DEVICEADDR = 66048;\n')
-                continue
-
-            # 探针 1：在去 SD 卡读数据前，打印打算读取的扇区号
-            if 'result = NX_SDMMC_ReadSectors(pSDXCBootStatus,' in line:
-                new_lines.append('\t\tprintf("\\r\\n===== BL1 DEBUG LOG =====\\r\\n");\n')
-                new_lines.append('\t\tprintf("Target DEVICEADDR: %d (0x%X)\\r\\n", pSBI->DEVICEADDR, pSBI->DEVICEADDR);\n')
-                new_lines.append('\t\tprintf("Target Sector: %d\\r\\n", pSBI->DEVICEADDR / 512);\n')
-                new_lines.append(line)
-                continue
-                
-            # 探针 2：在报错前，打印读出数据的 [第1个字节] 和 [签名区]
-            if 'if (pTBI->SIGNATURE != HEADER_ID )' in line:
-                new_lines.append('\t\tprintf("Read Sector First 4 Bytes: 0x%08X\\r\\n", ((U32 *)pTBI)[0]);\n')
-                new_lines.append('\t\tprintf("Read Sector SIGNATURE  : 0x%08X\\r\\n", pTBI->SIGNATURE);\n')
-                new_lines.append('\t\tprintf("=========================\\r\\n");\n')
-                new_lines.append(line)
-                continue
-
-            new_lines.append(line)
-
-        with open(target_file, 'w', encoding='utf-8') as f:
-            f.writelines(new_lines)
+            if (CTRUE != NX_SDMMC_Open(pSDXCBootStatus)) {
+                printf("Cannot Detect SDMMC\\r\\n");
+                return CFALSE;
+            }
             
-        print("DEBUG 探针植入完毕！")
+            printf("\\r\\n===== RP-KING6818 ULTIMATE LOADER =====\\r\\n");
+            printf("Target Sector : 129\\r\\n");
+            printf("Target Address: 0x%X\\r\\n", load_addr);
+            
+            /* 盲读！无视签名！无视解密！直接强插内存！ */
+            result = NX_SDMMC_ReadSectors(pSDXCBootStatus, 129, sector_count, (U32 *)load_addr);
+            
+            if (result == CTRUE) {
+                printf("Blind Read Success! Launching fip-loader...\\r\\n");
+                pTBI->LAUNCHADDR = load_addr;
+            } else {
+                printf("FATAL: SDMMC Read Failed!\\r\\n");
+            }
+            
+            return result;
+        }
+
+        """
+        content = pattern.sub(custom_sdmmcboot, content)
+
+        # 强行锁定 SD 卡物理通道 2，杜绝 BootROM 传错通道 (切断去 eMMC 的路)
+        content = content.replace('pSDXCBootStatus->SDPort = pSBI->DBI.SDMMCBI.PortNumber;', 'pSDXCBootStatus->SDPort = 2; // BLIND FORCE PORT 2')
+
+        with open('src/iSDHCBOOT.c', 'w', encoding='utf-8') as f:
+            f.write(content)
+        print("终极盲读加载器注入完成！已锁死通道2！")
         EOF
         
-        python3 patch_c_code.py
+        python3 rewrite_loader.py
 
     - name: 执行编译生成 32位 裸二进制文件 (Make BL1)
       run: |
