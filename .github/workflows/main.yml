@@ -29,39 +29,46 @@ jobs:
         sed -i 's/0x0F << 28/0x0F << 28 | 0x1E << 1/g' src/SecureManager.c || true
         echo "CFLAGS += -fcommon" >> config.mak
 
-        # 2. 物理嫁接：终极盲读 + 全局欺骗
+        # 2. 完美物理嫁接：终极盲读 + 全局欺骗 (绝不误杀引脚函数)
         cat << 'EOF' > rewrite_loader.py
+        import os
         import re
 
         with open('src/iSDHCBOOT.c', 'r', encoding='utf-8') as f:
             content = f.read()
 
-        pattern = re.compile(r'static\s+CBOOL\s+SDMMCBOOT.*?(?=U32\s+iSDXCBOOT)', re.DOTALL)
-        match = pattern.search(content)
+        # 使用正则精确定位原函数的开头，使用字符串定位结尾
+        match = re.search(r'static\s+CBOOL\s+SDMMCBOOT\(SDXCBOOTSTATUS', content)
+        start_idx = match.start() if match else -1
+        end_idx = content.find("void NX_SDPADSetALT(U32 PortNum)")
+
+        if start_idx == -1 or end_idx == -1:
+            print("ERROR: Cannot find function boundaries!")
+            exit(1)
 
         custom_sdmmcboot = """static CBOOL SDMMCBOOT(SDXCBOOTSTATUS * pSDXCBootStatus, struct NX_SecondBootInfo * pTBI)
         {
             CBOOL result = CFALSE;
-            U32 load_addr = 0x7FD00800; // 你证明了这是绝对正确的！
+            U32 load_addr = 0x7FD00800; // 绝对正确的友善装载地址
             U32 sector_count = 640;     
             
             if (CTRUE != NX_SDMMC_Open(pSDXCBootStatus)) {
                 return CFALSE;
             }
             
-            printf("\\n\\r===== RP-KING LOADER v3 =====\\n\\r");
+            printf("\\r\\n===== RP-KING LOADER v4 =====\\r\\n");
             
             result = NX_SDMMC_ReadSectors(pSDXCBootStatus, 129, sector_count, (U32 *)load_addr);
             
             if (result == CTRUE) {
-                printf("Read OK! Forcing Boot Handoff to SD Port 2...\\n\\r");
+                printf("Read OK! Forcing Boot Handoff to SD Port 2...\\r\\n");
                 
-                // 终极破案：篡改传给 fip-loader 的全局指针，彻底切断去 eMMC 的念想！
+                // 终极破案：篡改传给 fip-loader 的全局指针，彻底切断去 eMMC 寻找内核的念想！
                 pSBI->DBI.SDMMCBI.PortNumber = 2;
                 
                 pTBI->LAUNCHADDR = load_addr;
             } else {
-                printf("Read Failed!\\n\\r");
+                printf("FATAL: SDMMC Read Failed!\\r\\n");
             }
             
             return result;
@@ -69,8 +76,8 @@ jobs:
 
         """
         
-        if match:
-            content = content[:match.start()] + custom_sdmmcboot + content[match.end():]
+        # 完美替换，保留 end_idx 及以后的所有代码
+        content = content[:start_idx] + custom_sdmmcboot + content[end_idx:]
 
         # 强行锁定我们 BL1 自己的 SD 卡物理通道 2
         content = content.replace('pSDXCBootStatus->SDPort = pSBI->DBI.SDMMCBI.PortNumber;', 'pSDXCBootStatus->SDPort = 2;')
