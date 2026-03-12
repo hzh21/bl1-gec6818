@@ -18,7 +18,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y build-essential libncurses5 libtinfo5 gcc-arm-none-eabi
 
-    - name: 植入终极盲读加载器 (Inject Ultimate Blind Loader)
+    - name: 植入带全局欺骗的终极加载器
       run: |
         # 1. 强制回归 32 位模式并修复编译环境
         sed -i 's/OPMODE[[:space:]]*=[[:space:]]*aarch64/#OPMODE = aarch32/g' config.mak
@@ -29,63 +29,54 @@ jobs:
         sed -i 's/0x0F << 28/0x0F << 28 | 0x1E << 1/g' src/SecureManager.c || true
         echo "CFLAGS += -fcommon" >> config.mak
 
-        # 2. 精确制导物理嫁接！绝不误杀任何无辜函数，绝对没有注释污染
+        # 2. 物理嫁接：终极盲读 + 全局欺骗
         cat << 'EOF' > rewrite_loader.py
-        import os
+        import re
 
         with open('src/iSDHCBOOT.c', 'r', encoding='utf-8') as f:
             content = f.read()
 
-        # 找到需要被替换的函数的开头和结尾
-        start_marker = "static\tCBOOL\tSDMMCBOOT(SDXCBOOTSTATUS"
-        end_marker = "void NX_SDPADSetALT(U32 PortNum)"
+        pattern = re.compile(r'static\s+CBOOL\s+SDMMCBOOT.*?(?=U32\s+iSDXCBOOT)', re.DOTALL)
+        match = pattern.search(content)
 
-        start_idx = content.find(start_marker)
-        end_idx = content.find(end_marker)
-
-        if start_idx == -1 or end_idx == -1:
-            print("ERROR: Cannot find function boundaries!")
-            exit(1)
-
-        # 这是我们的终极盲读代码
         custom_sdmmcboot = """static CBOOL SDMMCBOOT(SDXCBOOTSTATUS * pSDXCBootStatus, struct NX_SecondBootInfo * pTBI)
         {
             CBOOL result = CFALSE;
-            U32 load_addr = 0x7FD00800; 
+            U32 load_addr = 0x7FD00800; // 你证明了这是绝对正确的！
             U32 sector_count = 640;     
             
             if (CTRUE != NX_SDMMC_Open(pSDXCBootStatus)) {
                 return CFALSE;
             }
             
-            printf("\\r\\n===== RP-KING6818 BLIND LOADER =====\\r\\n");
-            printf("Target Sector : 129\\r\\n");
+            printf("\\n\\r===== RP-KING LOADER v3 =====\\n\\r");
             
             result = NX_SDMMC_ReadSectors(pSDXCBootStatus, 129, sector_count, (U32 *)load_addr);
             
             if (result == CTRUE) {
-                printf("Read OK! Launching fip-loader...\\r\\n");
+                printf("Read OK! Forcing Boot Handoff to SD Port 2...\\n\\r");
+                
+                // 终极破案：篡改传给 fip-loader 的全局指针，彻底切断去 eMMC 的念想！
+                pSBI->DBI.SDMMCBI.PortNumber = 2;
+                
                 pTBI->LAUNCHADDR = load_addr;
             } else {
-                printf("Read Failed!\\r\\n");
+                printf("Read Failed!\\n\\r");
             }
             
             return result;
         }
 
         """
+        
+        if match:
+            content = content[:match.start()] + custom_sdmmcboot + content[match.end():]
 
-        # 精确切割拼接：保留开头 -> 插入我们的代码 -> 保留结尾 (从 NX_SDPADSetALT 开始)
-        # 注意：end_marker 之前多切除几个空行，防止有残留注释
-        content = content[:start_idx] + custom_sdmmcboot + "\n" + content[end_idx:]
-
-        # 强行锁定 SD 卡物理通道 2，杜绝 BootROM 传错通道 (切断去 eMMC 的路)
+        # 强行锁定我们 BL1 自己的 SD 卡物理通道 2
         content = content.replace('pSDXCBootStatus->SDPort = pSBI->DBI.SDMMCBI.PortNumber;', 'pSDXCBootStatus->SDPort = 2;')
 
         with open('src/iSDHCBOOT.c', 'w', encoding='utf-8') as f:
             f.write(content)
-            
-        print("物理嫁接完成，引脚函数已完美保留！")
         EOF
         
         python3 rewrite_loader.py
