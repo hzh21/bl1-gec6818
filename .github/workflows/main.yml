@@ -29,7 +29,7 @@ jobs:
         sed -i 's/0x0F << 28/0x0F << 28 | 0x1E << 1/g' src/SecureManager.c || true
         echo "CFLAGS += -fcommon" >> config.mak
 
-        # 2. Python 暴力重写加载逻辑，锁死通道 2，实施盲读
+        # 2. Python 暴力重写 SDMMCBOOT，绝对安全的无转义写法
         cat << 'EOF' > rewrite_loader.py
         import re
 
@@ -39,43 +39,43 @@ jobs:
         # 正则匹配删除原有的 SDMMCBOOT 冗长校验函数
         pattern = re.compile(r'static\s+CBOOL\s+SDMMCBOOT.*?(?=U32\s+iSDXCBOOT)', re.DOTALL)
         
-        custom_sdmmcboot = """static CBOOL SDMMCBOOT(SDXCBOOTSTATUS * pSDXCBootStatus, struct NX_SecondBootInfo * pTBI)
+        custom_sdmmcboot = """
+        static CBOOL SDMMCBOOT(SDXCBOOTSTATUS * pSDXCBootStatus, struct NX_SecondBootInfo * pTBI)
         {
             CBOOL result = CFALSE;
-            U32 load_addr = 0x7FD00800; // 友善官方定死的装载地址
-            U32 sector_count = 640;     // 扇区 129 到 768
+            U32 load_addr = 0x7FD00800; 
+            U32 sector_count = 640;     
             
             if (CTRUE != NX_SDMMC_Open(pSDXCBootStatus)) {
-                printf("Cannot Detect SDMMC\\r\\n");
                 return CFALSE;
             }
             
-            printf("\\r\\n===== RP-KING6818 ULTIMATE LOADER =====\\r\\n");
-            printf("Target Sector : 129\\r\\n");
-            printf("Target Address: 0x%X\\r\\n", load_addr);
+            printf("\\n\\r===== RP-KING6818 BLIND LOADER =====\\n\\r");
+            printf("Target Sector : 129\\n\\r");
             
-            /* 盲读！无视签名！无视解密！直接强插内存！ */
             result = NX_SDMMC_ReadSectors(pSDXCBootStatus, 129, sector_count, (U32 *)load_addr);
             
             if (result == CTRUE) {
-                printf("Blind Read Success! Launching fip-loader...\\r\\n");
+                printf("Read OK! Launching fip-loader...\\n\\r");
                 pTBI->LAUNCHADDR = load_addr;
             } else {
-                printf("FATAL: SDMMC Read Failed!\\r\\n");
+                printf("Read Failed!\\n\\r");
             }
             
             return result;
         }
 
         """
+        
+        # 消除上一个脚本当中 \\r\\n 引起的换行断层问题
+        custom_sdmmcboot = custom_sdmmcboot.replace('\\n', '\\x0a').replace('\\r', '\\x0d')
         content = pattern.sub(custom_sdmmcboot, content)
 
         # 强行锁定 SD 卡物理通道 2，杜绝 BootROM 传错通道 (切断去 eMMC 的路)
-        content = content.replace('pSDXCBootStatus->SDPort = pSBI->DBI.SDMMCBI.PortNumber;', 'pSDXCBootStatus->SDPort = 2; // BLIND FORCE PORT 2')
+        content = content.replace('pSDXCBootStatus->SDPort = pSBI->DBI.SDMMCBI.PortNumber;', 'pSDXCBootStatus->SDPort = 2;')
 
         with open('src/iSDHCBOOT.c', 'w', encoding='utf-8') as f:
             f.write(content)
-        print("终极盲读加载器注入完成！已锁死通道2！")
         EOF
         
         python3 rewrite_loader.py
