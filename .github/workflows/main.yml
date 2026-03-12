@@ -29,18 +29,18 @@ jobs:
         sed -i 's/0x0F << 28/0x0F << 28 | 0x1E << 1/g' src/SecureManager.c || true
         echo "CFLAGS += -fcommon" >> config.mak
 
-        # 2. Python 暴力重写 SDMMCBOOT，绝对安全的无转义写法
+        # 2. Python 物理切片嫁接，绝对免疫转义报错
         cat << 'EOF' > rewrite_loader.py
         import re
 
         with open('src/iSDHCBOOT.c', 'r', encoding='utf-8') as f:
             content = f.read()
 
-        # 正则匹配删除原有的 SDMMCBOOT 冗长校验函数
+        # 正则仅用于定位，不用于替换
         pattern = re.compile(r'static\s+CBOOL\s+SDMMCBOOT.*?(?=U32\s+iSDXCBOOT)', re.DOTALL)
-        
-        custom_sdmmcboot = """
-        static CBOOL SDMMCBOOT(SDXCBOOTSTATUS * pSDXCBootStatus, struct NX_SecondBootInfo * pTBI)
+        match = pattern.search(content)
+
+        custom_sdmmcboot = """static CBOOL SDMMCBOOT(SDXCBOOTSTATUS * pSDXCBootStatus, struct NX_SecondBootInfo * pTBI)
         {
             CBOOL result = CFALSE;
             U32 load_addr = 0x7FD00800; 
@@ -50,16 +50,16 @@ jobs:
                 return CFALSE;
             }
             
-            printf("\\n\\r===== RP-KING6818 BLIND LOADER =====\\n\\r");
-            printf("Target Sector : 129\\n\\r");
+            printf("\\r\\n===== RP-KING6818 BLIND LOADER =====\\r\\n");
+            printf("Target Sector : 129\\r\\n");
             
             result = NX_SDMMC_ReadSectors(pSDXCBootStatus, 129, sector_count, (U32 *)load_addr);
             
             if (result == CTRUE) {
-                printf("Read OK! Launching fip-loader...\\n\\r");
+                printf("Read OK! Launching fip-loader...\\r\\n");
                 pTBI->LAUNCHADDR = load_addr;
             } else {
-                printf("Read Failed!\\n\\r");
+                printf("Read Failed!\\r\\n");
             }
             
             return result;
@@ -67,15 +67,19 @@ jobs:
 
         """
         
-        # 消除上一个脚本当中 \\r\\n 引起的换行断层问题
-        custom_sdmmcboot = custom_sdmmcboot.replace('\\n', '\\x0a').replace('\\r', '\\x0d')
-        content = pattern.sub(custom_sdmmcboot, content)
+        if match:
+            # 物理切片嫁接，完美避开 re.sub 的转义陷阱
+            content = content[:match.start()] + custom_sdmmcboot + content[match.end():]
+        else:
+            print("ERROR: Cannot find SDMMCBOOT function!")
 
-        # 强行锁定 SD 卡物理通道 2，杜绝 BootROM 传错通道 (切断去 eMMC 的路)
+        # 强行锁定 SD 卡物理通道 2，切断去 eMMC 的路
         content = content.replace('pSDXCBootStatus->SDPort = pSBI->DBI.SDMMCBI.PortNumber;', 'pSDXCBootStatus->SDPort = 2;')
 
         with open('src/iSDHCBOOT.c', 'w', encoding='utf-8') as f:
             f.write(content)
+            
+        print("物理嫁接完成！")
         EOF
         
         python3 rewrite_loader.py
