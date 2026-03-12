@@ -18,26 +18,18 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y build-essential libncurses5 libtinfo5 gcc-arm-none-eabi
 
-    - name: 修复配置文件和替换 C 源码 (Patch config & Replace Source)
+    - name: 修复配置文件并植入 DEBUG 探针 (Patch config & Add Debug Probe)
       run: |
-        # 1. 强制回归 32 位模式
+        # 1. 强制回归 32 位模式并修复编译环境
         sed -i 's/OPMODE[[:space:]]*=[[:space:]]*aarch64/#OPMODE = aarch32/g' config.mak
         sed -i 's/#OPMODE[[:space:]]*=[[:space:]]*aarch32/OPMODE = aarch32/g' config.mak
-        
-        # 2. 暴力修改工具链前缀
         sed -i 's/arm-eabi-/arm-none-eabi-/g' config.mak Makefile
-        
-        # 3. 修复 Makefile 语法错误
         sed -i 's/^[[:space:]]*fi[[:space:]]*$/# fi/g' Makefile
-
-        # 4. 切除 TrustZone 1GB 枷锁
         sed -i 's/0x40000000/0x40000000/g' src/SecureManager.c || true
         sed -i 's/0x0F << 28/0x0F << 28 | 0x1E << 1/g' src/SecureManager.c || true
-        
-        # 5. 兼容现代编译器
         echo "CFLAGS += -fcommon" >> config.mak
 
-        # 6. 【终极绝杀】用 Python 脚本对 iSDHCBOOT.c 进行物理级换头手术！
+        # 2. 核心探测：用 Python 植入 printf 探针
         cat << 'EOF' > patch_c_code.py
         import os
 
@@ -47,20 +39,38 @@ jobs:
 
         new_lines = []
         for line in lines:
-            # 绝杀 1：强行切断 AES 解密陷阱 (将触发条件改为 if (0))
+            # 切除 AES 解密触发器
             if 'pReg_ClkPwr->SYSRSTCONFIG & 1<<14' in line:
-                line = line.replace('pReg_ClkPwr->SYSRSTCONFIG & 1<<14', '0 /* pReg_ClkPwr->SYSRSTCONFIG & 1<<14 */')
+                line = line.replace('pReg_ClkPwr->SYSRSTCONFIG & 1<<14', '0')
             
-            # 绝杀 2：在 iSDXCBOOT 函数内部强行指路 129 扇区 (66048)
+            # 强行指定 129 扇区地址
             if 'pSDXCBootStatus = &lSDXCBootStatus;' in line:
-                line = line + '\t\tpSBI->DEVICEADDR = 66048; // 强行拦截指路 129 扇区\n'
+                new_lines.append(line)
+                new_lines.append('\t\tpSBI->DEVICEADDR = 66048;\n')
+                continue
+
+            # 探针 1：在去 SD 卡读数据前，打印打算读取的扇区号
+            if 'result = NX_SDMMC_ReadSectors(pSDXCBootStatus,' in line:
+                new_lines.append('\t\tprintf("\\r\\n===== BL1 DEBUG LOG =====\\r\\n");\n')
+                new_lines.append('\t\tprintf("Target DEVICEADDR: %d (0x%X)\\r\\n", pSBI->DEVICEADDR, pSBI->DEVICEADDR);\n')
+                new_lines.append('\t\tprintf("Target Sector: %d\\r\\n", pSBI->DEVICEADDR / 512);\n')
+                new_lines.append(line)
+                continue
                 
+            # 探针 2：在报错前，打印读出数据的 [第1个字节] 和 [签名区]
+            if 'if (pTBI->SIGNATURE != HEADER_ID )' in line:
+                new_lines.append('\t\tprintf("Read Sector First 4 Bytes: 0x%08X\\r\\n", ((U32 *)pTBI)[0]);\n')
+                new_lines.append('\t\tprintf("Read Sector SIGNATURE  : 0x%08X\\r\\n", pTBI->SIGNATURE);\n')
+                new_lines.append('\t\tprintf("=========================\\r\\n");\n')
+                new_lines.append(line)
+                continue
+
             new_lines.append(line)
 
         with open(target_file, 'w', encoding='utf-8') as f:
             f.writelines(new_lines)
             
-        print("C语言源码修补完成：已切除解密陷阱，已强指 129 扇区！")
+        print("DEBUG 探针植入完毕！")
         EOF
         
         python3 patch_c_code.py
