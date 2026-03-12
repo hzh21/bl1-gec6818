@@ -29,7 +29,7 @@ jobs:
         sed -i 's/0x0F << 28/0x0F << 28 | 0x1E << 1/g' src/SecureManager.c || true
         echo "CFLAGS += -fcommon" >> config.mak
 
-        # 2. 精确制导物理嫁接！绝不误杀任何无辜函数
+        # 2. 精确制导物理嫁接！绝不误杀任何无辜函数，绝对没有注释污染
         cat << 'EOF' > rewrite_loader.py
         import os
 
@@ -73,11 +73,11 @@ jobs:
             return result;
         }
 
-        /*
-         """
+        """
 
         # 精确切割拼接：保留开头 -> 插入我们的代码 -> 保留结尾 (从 NX_SDPADSetALT 开始)
-        content = content[:start_idx] + custom_sdmmcboot + content[end_idx:]
+        # 注意：end_marker 之前多切除几个空行，防止有残留注释
+        content = content[:start_idx] + custom_sdmmcboot + "\n" + content[end_idx:]
 
         # 强行锁定 SD 卡物理通道 2，杜绝 BootROM 传错通道 (切断去 eMMC 的路)
         content = content.replace('pSDXCBootStatus->SDPort = pSBI->DBI.SDMMCBI.PortNumber;', 'pSDXCBootStatus->SDPort = 2;')
