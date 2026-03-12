@@ -29,17 +29,25 @@ jobs:
         sed -i 's/0x0F << 28/0x0F << 28 | 0x1E << 1/g' src/SecureManager.c || true
         echo "CFLAGS += -fcommon" >> config.mak
 
-        # 2. Python 物理切片嫁接，绝对免疫转义报错
+        # 2. 精确制导物理嫁接！绝不误杀任何无辜函数
         cat << 'EOF' > rewrite_loader.py
-        import re
+        import os
 
         with open('src/iSDHCBOOT.c', 'r', encoding='utf-8') as f:
             content = f.read()
 
-        # 正则仅用于定位，不用于替换
-        pattern = re.compile(r'static\s+CBOOL\s+SDMMCBOOT.*?(?=U32\s+iSDXCBOOT)', re.DOTALL)
-        match = pattern.search(content)
+        # 找到需要被替换的函数的开头和结尾
+        start_marker = "static\tCBOOL\tSDMMCBOOT(SDXCBOOTSTATUS"
+        end_marker = "void NX_SDPADSetALT(U32 PortNum)"
 
+        start_idx = content.find(start_marker)
+        end_idx = content.find(end_marker)
+
+        if start_idx == -1 or end_idx == -1:
+            print("ERROR: Cannot find function boundaries!")
+            exit(1)
+
+        # 这是我们的终极盲读代码
         custom_sdmmcboot = """static CBOOL SDMMCBOOT(SDXCBOOTSTATUS * pSDXCBootStatus, struct NX_SecondBootInfo * pTBI)
         {
             CBOOL result = CFALSE;
@@ -65,21 +73,19 @@ jobs:
             return result;
         }
 
-        """
-        
-        if match:
-            # 物理切片嫁接，完美避开 re.sub 的转义陷阱
-            content = content[:match.start()] + custom_sdmmcboot + content[match.end():]
-        else:
-            print("ERROR: Cannot find SDMMCBOOT function!")
+        /*
+         """
 
-        # 强行锁定 SD 卡物理通道 2，切断去 eMMC 的路
+        # 精确切割拼接：保留开头 -> 插入我们的代码 -> 保留结尾 (从 NX_SDPADSetALT 开始)
+        content = content[:start_idx] + custom_sdmmcboot + content[end_idx:]
+
+        # 强行锁定 SD 卡物理通道 2，杜绝 BootROM 传错通道 (切断去 eMMC 的路)
         content = content.replace('pSDXCBootStatus->SDPort = pSBI->DBI.SDMMCBI.PortNumber;', 'pSDXCBootStatus->SDPort = 2;')
 
         with open('src/iSDHCBOOT.c', 'w', encoding='utf-8') as f:
             f.write(content)
             
-        print("物理嫁接完成！")
+        print("物理嫁接完成，引脚函数已完美保留！")
         EOF
         
         python3 rewrite_loader.py
