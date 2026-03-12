@@ -18,7 +18,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y build-essential libncurses5 libtinfo5 gcc-arm-none-eabi
 
-    - name: 修复配置文件和 Makefile (Patch config & Makefile)
+    - name: 修复配置文件和替换 C 源码 (Patch config & Replace Source)
       run: |
         # 1. 强制回归 32 位模式
         sed -i 's/OPMODE[[:space:]]*=[[:space:]]*aarch64/#OPMODE = aarch32/g' config.mak
@@ -30,18 +30,40 @@ jobs:
         # 3. 修复 Makefile 语法错误
         sed -i 's/^[[:space:]]*fi[[:space:]]*$/# fi/g' Makefile
 
-        # 4. 强制截胡：篡改 DEVICEADDR 为 66048 (指向 129 扇区)
-        sed -i 's/pSDXCBootStatus = \&lSDXCBootStatus;/& pSBI->DEVICEADDR = 66048;/g' src/iSDHCBOOT.c
-        
-        # 5. 【终极防漏】用极其宽泛的正则，直接把解密触发条件碾碎成 if(0)！
-        sed -i 's/pReg_ClkPwr->SYSRSTCONFIG.*14/0/g' src/iSDHCBOOT.c
-
-        # 6. 切除 TrustZone 1GB 枷锁 (确保 2GB 全开)
+        # 4. 切除 TrustZone 1GB 枷锁
         sed -i 's/0x40000000/0x40000000/g' src/SecureManager.c || true
         sed -i 's/0x0F << 28/0x0F << 28 | 0x1E << 1/g' src/SecureManager.c || true
-
-        # 7. 兼容现代编译器
+        
+        # 5. 兼容现代编译器
         echo "CFLAGS += -fcommon" >> config.mak
+
+        # 6. 【终极绝杀】用 Python 脚本对 iSDHCBOOT.c 进行物理级换头手术！
+        cat << 'EOF' > patch_c_code.py
+        import os
+
+        target_file = 'src/iSDHCBOOT.c'
+        with open(target_file, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+
+        new_lines = []
+        for line in lines:
+            # 绝杀 1：强行切断 AES 解密陷阱 (将触发条件改为 if (0))
+            if 'pReg_ClkPwr->SYSRSTCONFIG & 1<<14' in line:
+                line = line.replace('pReg_ClkPwr->SYSRSTCONFIG & 1<<14', '0 /* pReg_ClkPwr->SYSRSTCONFIG & 1<<14 */')
+            
+            # 绝杀 2：在 iSDXCBOOT 函数内部强行指路 129 扇区 (66048)
+            if 'pSDXCBootStatus = &lSDXCBootStatus;' in line:
+                line = line + '\t\tpSBI->DEVICEADDR = 66048; // 强行拦截指路 129 扇区\n'
+                
+            new_lines.append(line)
+
+        with open(target_file, 'w', encoding='utf-8') as f:
+            f.writelines(new_lines)
+            
+        print("C语言源码修补完成：已切除解密陷阱，已强指 129 扇区！")
+        EOF
+        
+        python3 patch_c_code.py
 
     - name: 执行编译生成 32位 裸二进制文件 (Make BL1)
       run: |
