@@ -18,7 +18,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y build-essential libncurses5 libtinfo5 gcc-arm-none-eabi
 
-    - name: 植入 V9 完美回归加载器 (Perfect Restoration)
+    - name: 植入 V10 终极真理加载器 (The Truth)
       run: |
         sed -i 's/OPMODE[[:space:]]*=[[:space:]]*aarch64/#OPMODE = aarch32/g' config.mak
         sed -i 's/#OPMODE[[:space:]]*=[[:space:]]*aarch32/OPMODE = aarch32/g' config.mak
@@ -41,29 +41,40 @@ jobs:
         custom_sdmmcboot = """static CBOOL SDMMCBOOT(SDXCBOOTSTATUS * pSDXCBootStatus, struct NX_SecondBootInfo * pTBI)
         {
             CBOOL result = CFALSE;
-            U32 load_addr   = 0x7FD00000;  // 文件装载基址 (Header 落在此处)
-            U32 launch_addr = 0x7FD00800;  // 真实代码入口 (正好偏移 0x800)
+            U32 load_addr   = 0x7FD00000;
+            U32 launch_addr = 0x7FD00800;
             U32 sector_count = 640;     
             
+            printf("\\r\\n===== RP-KING LOADER v10 (The Truth) =====\\r\\n");
+            printf("BootROM passed Port: %d\\r\\n", pSBI->DBI.SDMMCBI.PortNumber);
+            
+            // 核心真相：通道 0 才是 SD 卡！通道 2 是 eMMC！
+            pSDXCBootStatus->SDPort = 0;
+            
             if (CTRUE != NX_SDMMC_Open(pSDXCBootStatus)) {
+                printf("SDMMC Open Failed on Port 0!\\r\\n");
                 return CFALSE;
             }
             
-            printf("\\r\\n===== RP-KING LOADER v9 (Perfect Restoration) =====\\r\\n");
-            
-            // 整体无损装载：将 129 扇区（含NSIH头）及后续内容全部压入基址
             result = NX_SDMMC_ReadSectors(pSDXCBootStatus, 129, sector_count, (U32 *)load_addr);
             
             if (result == CTRUE) {
-                printf("Read OK! Repairing Boot Handoff to SD Port 2...\\r\\n");
-                // 修复 BootROM 降级导致的通道错误
-                pSBI->DBI.SDMMCBI.PortNumber = 2;
+                printf("Read OK! Preparing to launch...\\r\\n");
                 
-                // 指挥 secondboot.c 跳转到正确的指令入口
-                pTBI->LAUNCHADDR = launch_addr;
-                printf("Handing over to secondboot.c for safe launch...\\r\\n");
-            } else {
-                printf("FATAL: SDMMC Read Failed!\\r\\n");
+                // 告诉接下来的 fip-loader：我们是从 SD 卡（通道 0）启动的！
+                pSBI->DBI.SDMMCBI.PortNumber = 0;
+                
+                NX_SDMMC_Close(pSDXCBootStatus);
+                NX_SDMMC_Terminate(pSDXCBootStatus);
+                
+                printf("Jumping to 0x%08X (R0=pSBI)...\\r\\n", launch_addr);
+                
+                // 完美的 ARM 标准跳转，把 pSBI 交到 R0 寄存器
+                void (*fip_jump)(U32, U32, U32) = (void (*)(U32, U32, U32))launch_addr;
+                fip_jump((U32)pSBI, 0, 0);
+                
+                printf("\\r\\n[!] ZOMBIE RETURN DETECTED!\\r\\n");
+                while(1);
             }
             
             return result;
@@ -73,7 +84,8 @@ jobs:
         
         content = content[:start_idx] + custom_sdmmcboot + content[end_idx:]
 
-        content = content.replace('pSDXCBootStatus->SDPort = pSBI->DBI.SDMMCBI.PortNumber;', 'pSDXCBootStatus->SDPort = 2;')
+        # 删除原版的通道指派，防止干扰我们函数内锁死的 Port 0
+        content = content.replace('pSDXCBootStatus->SDPort = pSBI->DBI.SDMMCBI.PortNumber;', '')
 
         with open('src/iSDHCBOOT.c', 'w', encoding='utf-8') as f:
             f.write(content)
