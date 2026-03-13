@@ -18,7 +18,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y build-essential libncurses5 libtinfo5 gcc-arm-none-eabi
 
-    - name: 植入 V12 终极黄金稳定版 (The Golden Master)
+    - name: 植入 V14 终极真理 (The Grand Unified Theory)
       run: |
         sed -i 's/OPMODE[[:space:]]*=[[:space:]]*aarch64/#OPMODE = aarch32/g' config.mak
         sed -i 's/#OPMODE[[:space:]]*=[[:space:]]*aarch32/OPMODE = aarch32/g' config.mak
@@ -42,14 +42,19 @@ jobs:
         custom_sdmmcboot = """static CBOOL SDMMCBOOT(SDXCBOOTSTATUS * pSDXCBootStatus, struct NX_SecondBootInfo * pTBI)
         {
             U32 load_addr = 0x7FD00000;
-            printf("\\r\\n===== RP-KING LOADER v12 (Golden Master) =====\\r\\n");
+            
+            printf("\\r\\n===== RP-KING LOADER v14 (The Grand Unified Theory) =====\\r\\n");
+            
+            // 核心真相 1：无条件信任硬件！BootROM 传几就是几（荣品的 SD 卡是 2！）
+            pSDXCBootStatus->SDPort = pSBI->DBI.SDMMCBI.PortNumber;
+            printf("Trusting BootROM Port: %d\\r\\n", pSDXCBootStatus->SDPort);
             
             if (CTRUE != NX_SDMMC_Open(pSDXCBootStatus)) return CFALSE;
             
-            // 盲读真正的 fip-loader 到基址
             if (NX_SDMMC_ReadSectors(pSDXCBootStatus, 129, 640, (U32 *)load_addr) == CTRUE) {
-                printf("Read OK! Returning safely to secondboot.c...\\r\\n");
-                // 精准指定代码入口
+                printf("Read OK! Returning safely...\\r\\n");
+                
+                // 核心真相 2：友善的 fip-loader 的灵魂入口，就在 0x800！
                 pTBI->LAUNCHADDR = 0x7FD00800;
                 return CTRUE;
             }
@@ -59,28 +64,25 @@ jobs:
         """
         c1 = c1[:start_idx] + custom_sdmmcboot + c1[end_idx:]
 
-        # 【致命BUG修复】：强制赋予确定的端口号 0 (SD卡)，彻底杜绝数组越界死机！
-        c1 = c1.replace('pSDXCBootStatus->SDPort = pSBI->DBI.SDMMCBI.PortNumber;', 
-                        'pSDXCBootStatus->SDPort = 0; pSBI->DBI.SDMMCBI.PortNumber = 0;')
-
         with open('src/iSDHCBOOT.c', 'w', encoding='utf-8') as f:
             f.write(c1)
 
-        # ========== 2. 修复 secondboot.c (终极兵器) ==========
+        # ========== 2. 修复 secondboot.c 的千年 Bug ==========
         with open('src/secondboot.c', 'r', encoding='utf-8') as f:
             c2 = f.read()
 
-        # 将原作者写残的 launch(0, 0, xxx) 强制替换为 launch((unsigned int)pSBI, 0, xxx)
-        # 这确保了在关闭了 MMU 之后的最后那绝命一跃，R0 寄存器里稳稳当当地装着 pSBI 档案！
-        c2 = re.sub(r'launch\s*\(\s*0\s*,\s*0\s*,', 'launch((unsigned int)pSBI, 0,', c2)
+        # 核心真相 3：利用正则替换，强行把 C 函数指针转换成标准的 ARM 跳转！
+        # 这会让 GCC 编译器乖乖地把 0xFFFF0000 (pSBI) 放到 R0 寄存器里，拯救 fip-loader！
+        c2 = re.sub(r'launch\s*\([^,]+,\s*[^,]+,\s*([^)]+)\);', r'((void (*)(unsigned int, unsigned int, unsigned int))\1)(0xFFFF0000, 0, 0);', c2)
 
         with open('src/secondboot.c', 'w', encoding='utf-8') as f:
             f.write(c2)
 
-        print("V12 Golden Master 补丁应用成功！")
+        print("V14 大统一真理补丁应用成功！")
         EOF
         
         python3 rewrite_loader.py
+        
     - name: 执行编译生成 32位 裸二进制文件 (Make BL1)
       run: |
         make
