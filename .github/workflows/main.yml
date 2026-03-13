@@ -18,7 +18,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y build-essential libncurses5 libtinfo5 gcc-arm-none-eabi
 
-    - name: 植入 V10 终极真理加载器 (The Truth)
+    - name: 植入 V11 终极桥梁 (The Final Bridge)
       run: |
         sed -i 's/OPMODE[[:space:]]*=[[:space:]]*aarch64/#OPMODE = aarch32/g' config.mak
         sed -i 's/#OPMODE[[:space:]]*=[[:space:]]*aarch32/OPMODE = aarch32/g' config.mak
@@ -31,6 +31,7 @@ jobs:
         cat << 'EOF' > rewrite_loader.py
         import re
 
+        # --- 第一步：修复读卡器 (戳穿 BootROM 的谎言) ---
         with open('src/iSDHCBOOT.c', 'r', encoding='utf-8') as f:
             content = f.read()
 
@@ -45,50 +46,46 @@ jobs:
             U32 launch_addr = 0x7FD00800;
             U32 sector_count = 640;     
             
-            printf("\\r\\n===== RP-KING LOADER v10 (The Truth) =====\\r\\n");
-            printf("BootROM passed Port: %d\\r\\n", pSBI->DBI.SDMMCBI.PortNumber);
+            printf("\\r\\n===== RP-KING LOADER v11 (The Final Bridge) =====\\r\\n");
+            printf("BootROM passed Port: %d (Liar!)\\r\\n", pSBI->DBI.SDMMCBI.PortNumber);
             
-            // 核心真相：通道 0 才是 SD 卡！通道 2 是 eMMC！
+            // 核心修复1：无视 BootROM，强制使用 SD 卡通道 0 读取
             pSDXCBootStatus->SDPort = 0;
             
-            if (CTRUE != NX_SDMMC_Open(pSDXCBootStatus)) {
-                printf("SDMMC Open Failed on Port 0!\\r\\n");
-                return CFALSE;
-            }
+            if (CTRUE != NX_SDMMC_Open(pSDXCBootStatus)) return CFALSE;
             
             result = NX_SDMMC_ReadSectors(pSDXCBootStatus, 129, sector_count, (U32 *)load_addr);
             
             if (result == CTRUE) {
-                printf("Read OK! Preparing to launch...\\r\\n");
-                
-                // 告诉接下来的 fip-loader：我们是从 SD 卡（通道 0）启动的！
+                printf("Read OK! Correcting Boot Handoff to Port 0...\\r\\n");
+                // 核心修复2：纠正谎言，告诉后面的兄弟我们在通道 0
                 pSBI->DBI.SDMMCBI.PortNumber = 0;
-                
-                NX_SDMMC_Close(pSDXCBootStatus);
-                NX_SDMMC_Terminate(pSDXCBootStatus);
-                
-                printf("Jumping to 0x%08X (R0=pSBI)...\\r\\n", launch_addr);
-                
-                // 完美的 ARM 标准跳转，把 pSBI 交到 R0 寄存器
-                void (*fip_jump)(U32, U32, U32) = (void (*)(U32, U32, U32))launch_addr;
-                fip_jump((U32)pSBI, 0, 0);
-                
-                printf("\\r\\n[!] ZOMBIE RETURN DETECTED!\\r\\n");
-                while(1);
+                pTBI->LAUNCHADDR = launch_addr;
+                printf("Returning to secondboot.c for MMU/Cache Teardown...\\r\\n");
             }
-            
             return result;
         }
 
         """
-        
         content = content[:start_idx] + custom_sdmmcboot + content[end_idx:]
-
-        # 删除原版的通道指派，防止干扰我们函数内锁死的 Port 0
         content = content.replace('pSDXCBootStatus->SDPort = pSBI->DBI.SDMMCBI.PortNumber;', '')
 
         with open('src/iSDHCBOOT.c', 'w', encoding='utf-8') as f:
             f.write(content)
+
+        # --- 第二步：修复起落架 (关闭 MMU 后的标准跳转) ---
+        with open('src/secondboot.c', 'r', encoding='utf-8') as f:
+            content2 = f.read()
+        
+        # 将原有错乱的 launch 替换为最高级的 C 函数指针跃迁，天然保证 R0 = pSBI
+        content2 = re.sub(r'launch\s*\(.*?TBI\.LAUNCHADDR.*?\);', 
+                          '((void (*)(U32, U32, U32))TBI.LAUNCHADDR)((U32)pSBI, 0, 0);', 
+                          content2, flags=re.DOTALL)
+                          
+        with open('src/secondboot.c', 'w', encoding='utf-8') as f:
+            f.write(content2)
+
+        print("V11 终极桥梁构建完成！")
         EOF
         
         python3 rewrite_loader.py
