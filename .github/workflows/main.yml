@@ -18,7 +18,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y build-essential libncurses5 libtinfo5 gcc-arm-none-eabi
 
-    - name: 植入 V7 AAPCS 标准交接加载器
+    - name: 植入 V8 绝对对齐加载器 (Alignment Strike)
       run: |
         sed -i 's/OPMODE[[:space:]]*=[[:space:]]*aarch64/#OPMODE = aarch32/g' config.mak
         sed -i 's/#OPMODE[[:space:]]*=[[:space:]]*aarch32/OPMODE = aarch32/g' config.mak
@@ -41,7 +41,8 @@ jobs:
         custom_sdmmcboot = """static CBOOL SDMMCBOOT(SDXCBOOTSTATUS * pSDXCBootStatus, struct NX_SecondBootInfo * pTBI)
         {
             CBOOL result = CFALSE;
-            U32 load_addr   = 0x7FD00000;
+            // 致命纠错：文件的第0字节就是机器码起点，必须整体装载到 0x7FD00800！
+            U32 load_addr   = 0x7FD00800; 
             U32 launch_addr = 0x7FD00800;
             U32 sector_count = 640;     
             
@@ -49,7 +50,7 @@ jobs:
                 return CFALSE;
             }
             
-            printf("\\r\\n===== RP-KING LOADER v7 (AAPCS Strike) =====\\r\\n");
+            printf("\\r\\n===== RP-KING LOADER v8 (Alignment Strike) =====\\r\\n");
             
             result = NX_SDMMC_ReadSectors(pSDXCBootStatus, 129, sector_count, (U32 *)load_addr);
             
@@ -57,19 +58,16 @@ jobs:
                 printf("Read OK! Forcing Boot Handoff to SD Port 2...\\r\\n");
                 pSBI->DBI.SDMMCBI.PortNumber = 2;
                 
-                printf("Closing SDMMC Hardware to prevent Bus Lockup...\\r\\n");
-                // 必须释放硬件，否则下一级一碰就死！
+                printf("Releasing Hardware Bus...\\r\\n");
                 NX_SDMMC_Close(pSDXCBootStatus);
                 NX_SDMMC_Terminate(pSDXCBootStatus);
                 
-                printf("Jumping to 0x%08X with R0=pSBI...\\r\\n", launch_addr);
+                printf("Jumping to 0x%08X (R0=pSBI)...\\r\\n", launch_addr);
                 
-                // 终极绝杀：使用标准 C 函数指针。
-                // 编译器会自动帮我们把 pSBI 完美地放进 R0, R1, R2 寄存器，符合所有 ARM 底层规范！
-                void (*fip_jump)(U32, U32, U32) = (void (*)(U32, U32, U32))launch_addr;
-                fip_jump((U32)pSBI, (U32)pSBI, (U32)pSBI);
+                // 完美跳跃
+                void (*fip_jump)(U32) = (void (*)(U32))launch_addr;
+                fip_jump((U32)pSBI);
                 
-                // 如果能运行到这里，说明又发生了僵尸返回！
                 printf("\\r\\n[!] ZOMBIE RETURN DETECTED! fip-loader crashed!\\r\\n");
                 while(1);
             }
