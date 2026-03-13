@@ -47,36 +47,38 @@ jobs:
         custom_sdmmcboot = """static CBOOL SDMMCBOOT(SDXCBOOTSTATUS * pSDXCBootStatus, struct NX_SecondBootInfo * pTBI)
         {
             CBOOL result = CFALSE;
-            U32 load_addr = 0x7FD00800;
+            U32 load_addr   = 0x7FD00000;  // 文件装载基址
+            U32 launch_addr = 0x7FD00800;  // 真正的代码入口
             U32 sector_count = 640;     
             
             if (CTRUE != NX_SDMMC_Open(pSDXCBootStatus)) {
                 return CFALSE;
             }
             
-            printf("\\r\\n===== RP-KING LOADER v5 (Hijack) =====\\r\\n");
+            printf("\\r\\n===== RP-KING LOADER v6 (Precision Strike) =====\\r\\n");
             
+            // 1. 把整个 fip-loader 文件读入基址
             result = NX_SDMMC_ReadSectors(pSDXCBootStatus, 129, sector_count, (U32 *)load_addr);
             
             if (result == CTRUE) {
                 printf("Read OK! Forcing Boot Handoff to SD Port 2...\\r\\n");
                 
-                // 篡改交接档案：告诉 fip-loader 我们在 SD 卡通道 2
+                // 2. 篡改交接档案：告诉 fip-loader 我们在 SD 卡通道 2
                 pSBI->DBI.SDMMCBI.PortNumber = 2;
                 
-                printf("Hijacking Execution! Forcing R0=pSBI and jumping to 0x%08X...\\r\\n", load_addr);
+                printf("Hijacking Execution! Jumping to 0x%08X...\\r\\n", launch_addr);
                 
-                // 【绝杀技】：内联汇编！强制把 pSBI 塞入 R0，pTBI 塞入 R1，然后直接跃迁！
+                // 3. 【饱和打击】：把 pSBI 同时塞满 R0, R1, R2，然后精确跳跃到偏移 0x800 处！
                 __asm__ __volatile__ (
                     "mov r0, %0\\n"
-                    "mov r1, %1\\n"
-                    "bx  %2\\n"
+                    "mov r1, %0\\n"
+                    "mov r2, %0\\n"
+                    "bx  %1\\n"
                     : 
-                    : "r" (pSBI), "r" (pTBI), "r" (load_addr)
-                    : "r0", "r1"
+                    : "r" (pSBI), "r" (launch_addr)
+                    : "r0", "r1", "r2"
                 );
                 
-                // 永远不会执行到这里！僵尸跳跃彻底断绝！
                 while(1);
             }
             
