@@ -18,9 +18,8 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y build-essential libncurses5 libtinfo5 gcc-arm-none-eabi
 
-    - name: 植入带内联汇编截胡强跳的终极加载器
+    - name: 植入 V7 AAPCS 标准交接加载器
       run: |
-        # 1. 强制回归 32 位模式并修复编译环境
         sed -i 's/OPMODE[[:space:]]*=[[:space:]]*aarch64/#OPMODE = aarch32/g' config.mak
         sed -i 's/#OPMODE[[:space:]]*=[[:space:]]*aarch32/OPMODE = aarch32/g' config.mak
         sed -i 's/arm-eabi-/arm-none-eabi-/g' config.mak Makefile
@@ -29,7 +28,6 @@ jobs:
         sed -i 's/0x0F << 28/0x0F << 28 | 0x1E << 1/g' src/SecureManager.c || true
         echo "CFLAGS += -fcommon" >> config.mak
 
-        # 2. 物理嫁接：终极盲读 + 全局欺骗 + 汇编截胡
         cat << 'EOF' > rewrite_loader.py
         import re
 
@@ -40,45 +38,39 @@ jobs:
         start_idx = match.start() if match else -1
         end_idx = content.find("void NX_SDPADSetALT(U32 PortNum)")
 
-        if start_idx == -1 or end_idx == -1:
-            print("ERROR: Cannot find function boundaries!")
-            exit(1)
-
         custom_sdmmcboot = """static CBOOL SDMMCBOOT(SDXCBOOTSTATUS * pSDXCBootStatus, struct NX_SecondBootInfo * pTBI)
         {
             CBOOL result = CFALSE;
-            U32 load_addr   = 0x7FD00000;  // 文件装载基址
-            U32 launch_addr = 0x7FD00800;  // 真正的代码入口
+            U32 load_addr   = 0x7FD00000;
+            U32 launch_addr = 0x7FD00800;
             U32 sector_count = 640;     
             
             if (CTRUE != NX_SDMMC_Open(pSDXCBootStatus)) {
                 return CFALSE;
             }
             
-            printf("\\r\\n===== RP-KING LOADER v6 (Precision Strike) =====\\r\\n");
+            printf("\\r\\n===== RP-KING LOADER v7 (AAPCS Strike) =====\\r\\n");
             
-            // 1. 把整个 fip-loader 文件读入基址
             result = NX_SDMMC_ReadSectors(pSDXCBootStatus, 129, sector_count, (U32 *)load_addr);
             
             if (result == CTRUE) {
                 printf("Read OK! Forcing Boot Handoff to SD Port 2...\\r\\n");
-                
-                // 2. 篡改交接档案：告诉 fip-loader 我们在 SD 卡通道 2
                 pSBI->DBI.SDMMCBI.PortNumber = 2;
                 
-                printf("Hijacking Execution! Jumping to 0x%08X...\\r\\n", launch_addr);
+                printf("Closing SDMMC Hardware to prevent Bus Lockup...\\r\\n");
+                // 必须释放硬件，否则下一级一碰就死！
+                NX_SDMMC_Close(pSDXCBootStatus);
+                NX_SDMMC_Terminate(pSDXCBootStatus);
                 
-                // 3. 【饱和打击】：把 pSBI 同时塞满 R0, R1, R2，然后精确跳跃到偏移 0x800 处！
-                __asm__ __volatile__ (
-                    "mov r0, %0\\n"
-                    "mov r1, %0\\n"
-                    "mov r2, %0\\n"
-                    "bx  %1\\n"
-                    : 
-                    : "r" (pSBI), "r" (launch_addr)
-                    : "r0", "r1", "r2"
-                );
+                printf("Jumping to 0x%08X with R0=pSBI...\\r\\n", launch_addr);
                 
+                // 终极绝杀：使用标准 C 函数指针。
+                // 编译器会自动帮我们把 pSBI 完美地放进 R0, R1, R2 寄存器，符合所有 ARM 底层规范！
+                void (*fip_jump)(U32, U32, U32) = (void (*)(U32, U32, U32))launch_addr;
+                fip_jump((U32)pSBI, (U32)pSBI, (U32)pSBI);
+                
+                // 如果能运行到这里，说明又发生了僵尸返回！
+                printf("\\r\\n[!] ZOMBIE RETURN DETECTED! fip-loader crashed!\\r\\n");
                 while(1);
             }
             
@@ -89,7 +81,6 @@ jobs:
         
         content = content[:start_idx] + custom_sdmmcboot + content[end_idx:]
 
-        # 锁死 BL1 的 SD 卡读取通道 2
         content = content.replace('pSDXCBootStatus->SDPort = pSBI->DBI.SDMMCBI.PortNumber;', 'pSDXCBootStatus->SDPort = 2;')
 
         with open('src/iSDHCBOOT.c', 'w', encoding='utf-8') as f:
