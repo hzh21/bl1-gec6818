@@ -18,7 +18,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y build-essential libncurses5 libtinfo5 gcc-arm-none-eabi
 
-    - name: 植入 V11 终极桥梁 (The Final Bridge)
+    - name: 植入 V12 终极黄金稳定版 (The Golden Master)
       run: |
         sed -i 's/OPMODE[[:space:]]*=[[:space:]]*aarch64/#OPMODE = aarch32/g' config.mak
         sed -i 's/#OPMODE[[:space:]]*=[[:space:]]*aarch32/OPMODE = aarch32/g' config.mak
@@ -31,61 +31,53 @@ jobs:
         cat << 'EOF' > rewrite_loader.py
         import re
 
-        # --- 第一步：修复读卡器 (戳穿 BootROM 的谎言) ---
+        # ========== 1. 修复 iSDHCBOOT.c ==========
         with open('src/iSDHCBOOT.c', 'r', encoding='utf-8') as f:
-            content = f.read()
+            c1 = f.read()
 
-        match = re.search(r'static\s+CBOOL\s+SDMMCBOOT\(SDXCBOOTSTATUS', content)
+        match = re.search(r'static\s+CBOOL\s+SDMMCBOOT\(SDXCBOOTSTATUS', c1)
         start_idx = match.start() if match else -1
-        end_idx = content.find("void NX_SDPADSetALT(U32 PortNum)")
+        end_idx = c1.find("void NX_SDPADSetALT(U32 PortNum)")
 
         custom_sdmmcboot = """static CBOOL SDMMCBOOT(SDXCBOOTSTATUS * pSDXCBootStatus, struct NX_SecondBootInfo * pTBI)
         {
-            CBOOL result = CFALSE;
-            U32 load_addr   = 0x7FD00000;
-            U32 launch_addr = 0x7FD00800;
-            U32 sector_count = 640;     
-            
-            printf("\\r\\n===== RP-KING LOADER v11 (The Final Bridge) =====\\r\\n");
-            printf("BootROM passed Port: %d (Liar!)\\r\\n", pSBI->DBI.SDMMCBI.PortNumber);
-            
-            // 核心修复1：无视 BootROM，强制使用 SD 卡通道 0 读取
-            pSDXCBootStatus->SDPort = 0;
+            U32 load_addr = 0x7FD00000;
+            printf("\\r\\n===== RP-KING LOADER v12 (Golden Master) =====\\r\\n");
             
             if (CTRUE != NX_SDMMC_Open(pSDXCBootStatus)) return CFALSE;
             
-            result = NX_SDMMC_ReadSectors(pSDXCBootStatus, 129, sector_count, (U32 *)load_addr);
-            
-            if (result == CTRUE) {
-                printf("Read OK! Correcting Boot Handoff to Port 0...\\r\\n");
-                // 核心修复2：纠正谎言，告诉后面的兄弟我们在通道 0
-                pSBI->DBI.SDMMCBI.PortNumber = 0;
-                pTBI->LAUNCHADDR = launch_addr;
-                printf("Returning to secondboot.c for MMU/Cache Teardown...\\r\\n");
+            // 盲读真正的 fip-loader 到基址
+            if (NX_SDMMC_ReadSectors(pSDXCBootStatus, 129, 640, (U32 *)load_addr) == CTRUE) {
+                printf("Read OK! Returning safely to secondboot.c...\\r\\n");
+                // 精准指定代码入口
+                pTBI->LAUNCHADDR = 0x7FD00800;
+                return CTRUE;
             }
-            return result;
+            return CFALSE;
         }
 
         """
-        content = content[:start_idx] + custom_sdmmcboot + content[end_idx:]
-        content = content.replace('pSDXCBootStatus->SDPort = pSBI->DBI.SDMMCBI.PortNumber;', '')
+        c1 = c1[:start_idx] + custom_sdmmcboot + c1[end_idx:]
+
+        # 【致命BUG修复】：强制赋予确定的端口号 0 (SD卡)，彻底杜绝数组越界死机！
+        c1 = c1.replace('pSDXCBootStatus->SDPort = pSBI->DBI.SDMMCBI.PortNumber;', 
+                        'pSDXCBootStatus->SDPort = 0; pSBI->DBI.SDMMCBI.PortNumber = 0;')
 
         with open('src/iSDHCBOOT.c', 'w', encoding='utf-8') as f:
-            f.write(content)
+            f.write(c1)
 
-        # --- 第二步：修复起落架 (关闭 MMU 后的标准跳转) ---
+        # ========== 2. 修复 secondboot.c (终极兵器) ==========
         with open('src/secondboot.c', 'r', encoding='utf-8') as f:
-            content2 = f.read()
-        
-        # 将原有错乱的 launch 替换为最高级的 C 函数指针跃迁，天然保证 R0 = pSBI
-        content2 = re.sub(r'launch\s*\(.*?TBI\.LAUNCHADDR.*?\);', 
-                          '((void (*)(U32, U32, U32))TBI.LAUNCHADDR)((U32)pSBI, 0, 0);', 
-                          content2, flags=re.DOTALL)
-                          
-        with open('src/secondboot.c', 'w', encoding='utf-8') as f:
-            f.write(content2)
+            c2 = f.read()
 
-        print("V11 终极桥梁构建完成！")
+        # 将原作者写残的 launch(0, 0, xxx) 强制替换为 launch((unsigned int)pSBI, 0, xxx)
+        # 这确保了在关闭了 MMU 之后的最后那绝命一跃，R0 寄存器里稳稳当当地装着 pSBI 档案！
+        c2 = re.sub(r'launch\s*\(\s*0\s*,\s*0\s*,', 'launch((unsigned int)pSBI, 0,', c2)
+
+        with open('src/secondboot.c', 'w', encoding='utf-8') as f:
+            f.write(c2)
+
+        print("V12 Golden Master 补丁应用成功！")
         EOF
         
         python3 rewrite_loader.py
